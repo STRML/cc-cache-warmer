@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# Keep an idle Claude Code session's prompt cache warm, then compact it.
+# Hook entry points: Stop, UserPromptSubmit, SessionEnd. `timer` runs detached.
+# Flow and failure matrix: docs/PLAN.md.
+set -uo pipefail
+
+PINGS=${CC_CACHE_WARMER_PINGS:-3}
+MIN_TOKENS=${CC_CACHE_WARMER_MIN_TOKENS:-50000}
+DATA=${CLAUDE_PLUGIN_DATA:-${TMPDIR:-/tmp}/cc-cache-warmer}
+WARM_PROMPT='[cache-warmer] Keep-alive ping to hold the prompt cache. Reply with only: ok'
+LOG="$DATA/warmer.log"
+FLUSH=2
+
+log() { printf '%s %s %s\n' "$(date +%FT%T)" "${SID:-?}" "$*" >>"$LOG"; }
+
+mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"; }
+
+# Cache TTL in seconds from the newest cache write, or nothing.
+cache_ttl() {
+  tail -n 400 "$1" | jq -Rr 'fromjson? | select(.type=="assistant" and .isSidechain != true)
+    | .message.usage.cache_creation // empty
+    | if (.ephemeral_1h_input_tokens // 0) > 0 then 3600
+      elif (.ephemeral_5m_input_tokens // 0) > 0 then 300 else empty end' | tail -n 1
+}
+
+# Prompt size of the newest main-thread request.
+context_tokens() {
+  tail -n 400 "$1" | jq -Rr 'fromjson? | select(.type=="assistant" and .isSidechain != true)
+    | .message.usage // empty
+    | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)' | tail -n 1
+}
+
+# Text in Claude Code's input box: the lines between the last two horizontal rules.
+input_text() {
+  awk '/^─/ { n++; last = prev; prev = NR } { line[NR] = $0 }
+       END { if (n < 2) exit 1; for (i = last + 1; i < prev; i++) print line[i] }' |
+    sed -e 's/❯//g' -e $'s/\xc2\xa0//g' -e 's/[[:space:]]//g'
+}
+
+kill_timer() {
+  [ -f "$DIR/pid" ] || return 0
+  kill "$(cat "$DIR/pid")" 2>/dev/null
+  rm -f "$DIR/pid"
+}
+
+pings_sent() { cat "$DIR/pings" 2>/dev/null || echo 0; }
+
+on_stop() {
+  [ -n "${CMUX_SURFACE_ID:-}" ] || { log "skip: not in cmux"; return; }
+  [ "$(pings_sent)" -le "$PINGS" ] || { log "skip: done"; return; }
+  kill_timer
+  nohup "$0" timer "$DIR" "$TRANSCRIPT" "$CMUX_SURFACE_ID" >/dev/null 2>&1 </dev/null &
+  echo $! >"$DIR/pid"
+}
+
+on_prompt() {
+  local prompt pending
+  prompt=$(jq -r '.prompt // ""' <<<"$INPUT")
+  pending=$(cat "$DIR/pending" 2>/dev/null) || pending=""
+  rm -f "$DIR/pending"
+  [ -n "$pending" ] && [ "$prompt" = "$pending" ] && return
+  kill_timer
+  echo 0 >"$DIR/pings"
+}
+
+on_end() {
+  kill_timer
+  rm -rf "$DIR"
+}
+
+still_current() { [ "$(cat "$DIR/pid" 2>/dev/null)" = "$$" ]; }
+
+# Timer body. Runs detached; every guard logs why it did nothing.
+# Stop fires before the turn's usage line is flushed, so read the transcript after FLUSH.
+timer() {
+  DIR=$1
+  TRANSCRIPT=$2
+  SID=$(basename "$DIR")
+  local surface=$3 ttl tokens delay wait
+  sleep "$FLUSH"
+  still_current || exit 0
+  ttl=$(cache_ttl "$TRANSCRIPT" 2>/dev/null)
+  [ -n "$ttl" ] || { log "skip: no cache info"; exit 0; }
+  tokens=$(context_tokens "$TRANSCRIPT")
+  [ "${tokens:-0}" -ge "$MIN_TOKENS" ] || { log "skip: small context tokens=${tokens:-0}"; exit 0; }
+  delay=$((ttl - (ttl / 5 < 300 ? ttl / 5 : 300)))
+  wait=${CC_CACHE_WARMER_DELAY:-$delay}
+  local armed_at grace=$((wait / 4 < 30 ? wait / 4 : 30))
+  armed_at=$(date +%s)
+  log "armed ttl=$ttl delay=$delay sleep=$wait tokens=$tokens pings=$(pings_sent)/$PINGS"
+  sleep "$wait"
+  still_current || exit 0
+  rm -f "$DIR/pid"
+  [ "$(mtime "$TRANSCRIPT")" -le $((armed_at + grace)) ] || { log "skip: session active"; exit 0; }
+  local screen draft
+  screen=$(cmux read-screen --surface "$surface" --lines 30) || { log "skip: cannot read screen"; exit 0; }
+  draft=$(input_text <<<"$screen") || { log "skip: cannot read screen (no input box)"; exit 0; }
+  [ -z "$draft" ] || { log "skip: draft in input"; exit 0; }
+  send "$surface"
+}
+
+send() {
+  local n text
+  n=$(($(pings_sent) + 1))
+  text=$WARM_PROMPT
+  [ "$n" -gt "$PINGS" ] && text=/compact
+  printf '%s' "$text" >"$DIR/pending"
+  if ! cmux send --surface "$1" "$text" || ! cmux send-key --surface "$1" enter; then
+    log "error: send failed"
+    exit 0
+  fi
+  echo "$n" >"$DIR/pings"
+  local what="warm $n/$PINGS"
+  [ "$text" = /compact ] && what=compact
+  log "$what"
+}
+
+main() {
+  mkdir -p "$DATA"
+  local event=${1:-}
+  [ "$event" = timer ] && { shift; timer "$@"; exit 0; }
+  INPUT=$(cat)
+  SID=$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null | tr -cd 'A-Za-z0-9_-')
+  TRANSCRIPT=$(jq -r '.transcript_path // empty' <<<"$INPUT" 2>/dev/null)
+  [ -n "$SID" ] || { log "error: bad input event=$event"; exit 0; }
+  DIR="$DATA/$SID"
+  mkdir -p "$DIR"
+  case $event in
+    Stop) on_stop ;;
+    UserPromptSubmit) on_prompt ;;
+    SessionEnd) on_end ;;
+    *) log "error: unknown event=$event" ;;
+  esac
+  exit 0
+}
+
+main "$@"

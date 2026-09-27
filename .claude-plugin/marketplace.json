@@ -1,0 +1,11 @@
+{
+  "name": "cc-cache-warmer",
+  "owner": { "name": "Samuel Reed" },
+  "plugins": [
+    {
+      "name": "cc-cache-warmer",
+      "source": "./",
+      "description": "Keeps an idle session's prompt cache warm, then compacts it. Requires cmux."
+    }
+  ]
+}
