@@ -40,7 +40,7 @@ the cache, wrote 133, and produced 4 output tokens.
 ## Install
 
 ```sh
-claude plugin marketplace add ~/git/oss/cc-cache-warmer
+claude plugin marketplace add STRML/cc-cache-warmer
 claude plugin install cc-cache-warmer@cc-cache-warmer
 ```
 
