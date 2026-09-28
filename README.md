@@ -131,7 +131,7 @@ Each skip is logged to `warmer.log` in the plugin's data directory
 Each scenario matches one row of the failure matrix in
 [docs/PLAN.md](docs/PLAN.md). A fake `cmux` on `PATH` records every call. The
 results land in `tests/out/results.txt`. CI runs shellcheck and the suite on
-Linux and macOS for every push and pull request.
+Linux and macOS on pushes to main and on every pull request.
 
 ## License
 
