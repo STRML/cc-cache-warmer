@@ -13,13 +13,13 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install shellcheck
         if: runner.os == 'macOS'
         run: brew install shellcheck
       - run: shellcheck bin/cache-warmer tests/e2e.sh
       - run: ./tests/e2e.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: results-${{ matrix.os }}

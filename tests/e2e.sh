@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2329 # helpers run indirectly through check "$@"
+# shellcheck disable=SC2317,SC2329 # helpers run indirectly through check "$@" (older shellcheck calls it SC2317)
 # E2E tests for bin/cache-warmer. One scenario per failure-matrix row in docs/PLAN.md.
 # A fake `cmux` on PATH records every call. Artifact: tests/out/results.txt.
 set -uo pipefail
