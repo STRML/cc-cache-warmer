@@ -137,9 +137,15 @@ check 9 "after compact, Stop does not re-arm" \
 setup r10; transcript 1h 200000; hook Stop; hook UserPromptSubmit "real question"; wait_fire
 check 10 "user prompt cancels the timer" no_sends
 
-# Row 12: transcript written after arm (a turn with no UserPromptSubmit).
-setup r12; transcript 1h 200000; hook Stop; sleep $((FLUSH + 1)); touch -t "$(date -v+1S +%Y%m%d%H%M.%S)" "$TR"; wait_fire
+# Row 12: a conversation record lands after arm (a turn with no UserPromptSubmit).
+setup r12; transcript 1h 200000; hook Stop; sleep $((FLUSH + 1))
+printf '{"type":"assistant","timestamp":"%s","message":{"usage":{}}}\n' "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >>"$TR"; wait_fire
 check 12 "activity after arm skips" bash -c "[ \$(grep -c '^send ' '$FAKE_LOG') -eq 0 ] && grep -q 'skip: session active' '$CLAUDE_PLUGIN_DATA/warmer.log'"
+
+# Row 19: Claude Code's idle recap (away_summary) and metadata land after arm (seen live).
+setup r19; transcript 1h 200000; hook Stop; sleep $((FLUSH + 1))
+printf '{"type":"system","subtype":"away_summary","timestamp":"%s"}\n{"type":"ai-title","aiTitle":"x"}\n' "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >>"$TR"; wait_fire
+check 19 "idle recap after arm still fires" has_log 'warm 1/3'
 
 # Row 13: draft in the input box.
 setup r13; transcript 1h 200000; printf '%s\n' "$DRAFT_SCREEN" >"$FAKE_SCREEN"; hook Stop; wait_fire

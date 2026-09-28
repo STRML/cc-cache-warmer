@@ -117,7 +117,7 @@ Each skip is logged to `warmer.log` in the plugin's data directory
 | `skip: not in cmux` | `CMUX_SURFACE_ID` is unset. |
 | `skip: no cache info` | The transcript has no cache write. Non-Anthropic backends often report none. |
 | `skip: small context` | The context is below `CC_CACHE_WARMER_MIN_TOKENS`. |
-| `skip: session active` | The transcript changed after the timer armed. |
+| `skip: session active` | A message or reply landed after the timer armed. Idle recaps and metadata records do not count. |
 | `skip: draft in input` | You left text in the input box. The plugin won't type over it. |
 | `skip: cannot read screen` | `cmux read-screen` failed, or no input box is visible (for example, a permission prompt is open). |
 | `skip: done` | The session is compacted. The next message you send restarts the cycle. |

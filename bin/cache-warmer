@@ -13,7 +13,12 @@ FLUSH=2
 
 log() { printf '%s %s %s\n' "$(date +%FT%T)" "${SID:-?}" "$*" >>"$LOG"; }
 
-mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"; }
+# Epoch of the newest user or assistant record. Claude Code also appends records
+# while idle (the away_summary recap, titles, mode), so file mtime is not activity.
+last_activity() {
+  tail -n 400 "$1" | jq -Rr 'fromjson? | select((.type=="user" or .type=="assistant") and .timestamp)
+    | .timestamp | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601' | tail -n 1
+}
 
 # Cache TTL in seconds from the newest cache write, or nothing.
 cache_ttl() {
@@ -85,13 +90,15 @@ timer() {
   [ "${tokens:-0}" -ge "$MIN_TOKENS" ] || { log "skip: small context tokens=${tokens:-0}"; exit 0; }
   delay=$((ttl - (ttl / 5 < 300 ? ttl / 5 : 300)))
   wait=${CC_CACHE_WARMER_DELAY:-$delay}
-  local armed_at grace=$((wait / 4 < 30 ? wait / 4 : 30))
+  local armed_at
   armed_at=$(date +%s)
   log "armed ttl=$ttl delay=$delay sleep=$wait tokens=$tokens pings=$(pings_sent)/$PINGS"
   sleep "$wait"
   still_current || exit 0
   rm -f "$DIR/pid"
-  [ "$(mtime "$TRANSCRIPT")" -le $((armed_at + grace)) ] || { log "skip: session active"; exit 0; }
+  local active
+  active=$(last_activity "$TRANSCRIPT")
+  [ "${active:-0}" -le "$armed_at" ] || { log "skip: session active"; exit 0; }
   local screen draft
   screen=$(cmux read-screen --surface "$surface" --lines 30) || { log "skip: cannot read screen"; exit 0; }
   draft=$(input_text <<<"$screen") || { log "skip: cannot read screen (no input box)"; exit 0; }

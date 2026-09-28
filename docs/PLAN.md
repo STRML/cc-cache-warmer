@@ -47,10 +47,11 @@ Each warm prompt ends a turn, so its Stop hook re-arms the next cycle.
 | 9 | Stop after compact (pings > N) | nothing | loop re-arms forever | log `skip: done` |
 | 10 | UserPromptSubmit, user text | resets pings, kills timer | stale timer fires on active session | no send |
 | 11 | UserPromptSubmit, text equals `pending` | keeps pings, clears `pending` | counter reset by own ping, warms forever | pings survive |
-| 12 | timer fires, transcript written after arm | nothing | fires mid-turn | log `skip: session active` |
+| 12 | timer fires, a `user` or `assistant` record written after arm | nothing | fires mid-turn | log `skip: session active` |
 | 13 | timer fires, draft in input box | nothing | clobbers draft | log `skip: draft in input` |
 | 14 | timer fires, `read-screen` fails | nothing | types blind | log `skip: cannot read screen` |
 | 15 | SessionEnd | kills timer, removes state dir | orphan timer types into a dead pane | no send |
 | 16 | hook stdin is not JSON / missing fields | nothing | hook error shown to user | exits 0, log `error: bad input` |
 | 17 | Stop fires before the turn's usage line reaches the transcript (seen live) | timer waits 2 s, then reads TTL | reads the previous turn, or nothing | arms normally |
 | 18 | UserPromptSubmit on the first prompt, transcript file not created yet (seen live) | resets count | rejected as bad input | no error |
+| 19 | Claude Code appends an `away_summary` recap (about 3 min after the turn) or metadata records while idle (seen live) | fires normally | every timer skips as `session active`, so nothing ever warms | log `warm n/N` |
