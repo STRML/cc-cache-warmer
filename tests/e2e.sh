@@ -34,11 +34,15 @@ setup() {
   export CMUX_SURFACE_ID="SURF-1"
   export CC_CACHE_WARMER_DELAY=$SLEEP
   unset CC_CACHE_WARMER_PINGS CC_CACHE_WARMER_MIN_TOKENS FAKE_SCREEN_FAIL
+  export FAKE_NOTES="$T/notes.json"
   : >"$FAKE_LOG"
+  echo '[]' >"$FAKE_NOTES"
   printf '%s\n' "$EMPTY_SCREEN" >"$FAKE_SCREEN"
   cat >"$T/bin/cmux" <<'EOF'
 #!/usr/bin/env bash
+[ "$1" = --json ] && shift
 cmd=$1; shift
+[ "$cmd" = list-notifications ] && cat "$FAKE_NOTES"
 if [ "$cmd" = read-screen ]; then
   [ -n "${FAKE_SCREEN_FAIL:-}" ] && exit 1
   cat "$FAKE_SCREEN"; exit 0
@@ -170,6 +174,38 @@ check 17 "usage written after Stop still arms and fires" has_log 'warm 1/3'
 # Row 18: first prompt, before the transcript file exists.
 setup r18; hook UserPromptSubmit "first prompt"
 check 18 "prompt with no transcript yet is accepted" bash -c "! grep -q error '$CLAUDE_PLUGIN_DATA/warmer.log' 2>/dev/null && [ \$(cat '$CLAUDE_PLUGIN_DATA/S1/pings') -eq 0 ]"
+
+# note ID SURFACE CREATED_AT: the notification list cmux would return.
+note() { jq -nc --arg i "$1" --arg s "$2" --arg c "$3" '{id:$i,surface_id:$s,created_at:$c,body:"ok",is_read:false}'; }
+now_utc() { date -u +%FT%TZ; }
+
+# ping_turn: our ping is sent, submitted, and its turn ends with a Stop.
+ping_turn() {
+  transcript 1h 200000; hook Stop; wait_fire
+  hook UserPromptSubmit "$(cat "$CLAUDE_PLUGIN_DATA/S1/pending")"
+}
+
+# Row 20: cmux's notification for our own ping's turn is dismissed.
+setup r20; ping_turn
+note N-PING SURF-1 "$(now_utc)" | jq -s . >"$FAKE_NOTES"; hook Stop; sleep 2
+check 20 "own ping's notification dismissed" \
+  bash -c "grep -q '^dismiss-notification --id N-PING' '$FAKE_LOG' && grep -q 'quiet: dismissed 1' '$CLAUDE_PLUGIN_DATA/warmer.log'"
+
+# Row 21: an older notification on the surface, and one on another surface, stay.
+setup r21; ping_turn
+{ note N-OLD SURF-1 2020-01-01T00:00:00Z; note N-OTHER SURF-2 "$(now_utc)"; note N-PING SURF-1 "$(now_utc)"; } | jq -s . >"$FAKE_NOTES"
+hook Stop; sleep 2
+check 21 "only notifications since the send are dismissed" \
+  bash -c "grep -q 'dismiss-notification --id N-PING' '$FAKE_LOG' && ! grep -qE 'N-OLD|N-OTHER' '$FAKE_LOG'"
+
+# Row 22: a Stop after your own prompt leaves notifications alone.
+setup r22; transcript 1h 200000; hook UserPromptSubmit "real question"
+note N-REAL SURF-1 "$(now_utc)" | jq -s . >"$FAKE_NOTES"; hook Stop; sleep 2
+check 22 "user turn is not quieted" bash -c "! grep -q 'notification' '$FAKE_LOG'"
+
+# Row 23: no notification ever shows up.
+setup r23; ping_turn; hook Stop; sleep 12
+check 23 "gives up when nothing arrives" has_log 'quiet: none'
 
 echo "$FAILS failed" | tee -a "$RESULTS"
 exit $((FAILS > 0))

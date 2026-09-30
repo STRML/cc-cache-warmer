@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Keep an idle Claude Code session's prompt cache warm, then compact it.
-# Hook entry points: Stop, UserPromptSubmit, SessionEnd. `timer` runs detached.
+# Hook entry points: Stop, UserPromptSubmit, SessionEnd. `timer` and `quiet` run detached.
 # Flow and failure matrix: docs/PLAN.md.
 set -uo pipefail
 
@@ -52,6 +52,10 @@ pings_sent() { cat "$DIR/pings" 2>/dev/null || echo 0; }
 
 on_stop() {
   [ -n "${CMUX_SURFACE_ID:-}" ] || { log "skip: not in cmux"; return; }
+  if [ -f "$DIR/quiet" ]; then
+    nohup "$0" quiet "$DIR" "$CMUX_SURFACE_ID" "$(cat "$DIR/quiet")" >/dev/null 2>&1 </dev/null &
+    rm -f "$DIR/quiet"
+  fi
   [ "$(pings_sent)" -le "$PINGS" ] || { log "skip: done"; return; }
   kill_timer
   nohup "$0" timer "$DIR" "$TRANSCRIPT" "$CMUX_SURFACE_ID" >/dev/null 2>&1 </dev/null &
@@ -62,8 +66,11 @@ on_prompt() {
   local prompt pending
   prompt=$(jq -r '.prompt // ""' <<<"$INPUT")
   pending=$(cat "$DIR/pending" 2>/dev/null) || pending=""
-  rm -f "$DIR/pending"
-  [ -n "$pending" ] && [ "$prompt" = "$pending" ] && return
+  rm -f "$DIR/pending" "$DIR/quiet"
+  if [ -n "$pending" ] && [ "$prompt" = "$pending" ]; then
+    mv "$DIR/sent_at" "$DIR/quiet" 2>/dev/null
+    return
+  fi
   kill_timer
   echo 0 >"$DIR/pings"
 }
@@ -106,12 +113,34 @@ timer() {
   send "$surface"
 }
 
+# cmux's own Stop hook posts a notification for every turn, our pings included.
+# Dismiss the ones on this surface created since the ping went out. cmux posts
+# from a hook running beside ours, so poll for it.
+quiet() {
+  DIR=$1
+  SID=$(basename "$DIR")
+  local surface=$2 since=$3 ids _
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 1
+    ids=$(cmux --json list-notifications 2>/dev/null | jq -r --arg s "$surface" --arg t "$since" \
+      '.[] | select(.surface_id == $s and .created_at >= $t) | .id' 2>/dev/null)
+    [ -n "$ids" ] && break
+  done
+  [ -n "$ids" ] || { log "quiet: none"; exit 0; }
+  local id n=0
+  for id in $ids; do
+    cmux dismiss-notification --id "$id" >/dev/null 2>&1 && n=$((n + 1))
+  done
+  log "quiet: dismissed $n"
+}
+
 send() {
   local n text
   n=$(($(pings_sent) + 1))
   text=$WARM_PROMPT
   [ "$n" -gt "$PINGS" ] && text=/compact
   printf '%s' "$text" >"$DIR/pending"
+  date -u +%FT%TZ >"$DIR/sent_at"
   if ! cmux send --surface "$1" "$text" || ! cmux send-key --surface "$1" enter; then
     log "error: send failed"
     exit 0
@@ -126,6 +155,7 @@ main() {
   mkdir -p "$DATA"
   local event=${1:-}
   [ "$event" = timer ] && { shift; timer "$@"; exit 0; }
+  [ "$event" = quiet ] && { shift; quiet "$@"; exit 0; }
   INPUT=$(cat)
   SID=$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null | tr -cd 'A-Za-z0-9_-')
   TRANSCRIPT=$(jq -r '.transcript_path // empty' <<<"$INPUT" 2>/dev/null)
