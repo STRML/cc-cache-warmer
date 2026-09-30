@@ -34,6 +34,12 @@ Any message you type cancels the pending timer and resets the count. The
 plugin compares each prompt with the text it last sent, so its own pings
 don't reset the count.
 
+cmux posts a notification every time a turn ends, pings included. After each
+ping's turn, the plugin dismisses the notifications on its pane created since
+it sent the ping, so pings don't leave unread markers. Notifications you had
+not read yet stay. A banner or phone push cmux already delivered can't be
+recalled.
+
 Measured on a 70k-token session: the keep-alive turn read 70,471 tokens from
 the cache, wrote 133, and produced 4 output tokens.
 
@@ -121,6 +127,7 @@ Each skip is logged to `warmer.log` in the plugin's data directory
 | `skip: draft in input` | You left text in the input box. The plugin won't type over it. |
 | `skip: cannot read screen` | `cmux read-screen` failed, or no input box is visible (for example, a permission prompt is open). |
 | `skip: done` | The session is compacted. The next message you send restarts the cycle. |
+| `quiet: none` | No notification for the ping's turn showed up within 10 s, so nothing was dismissed. |
 
 ## Tests
 

@@ -29,8 +29,13 @@ Each warm prompt ends a turn, so its Stop hook re-arms the next cycle.
   it sent in a `pending` file. UserPromptSubmit compares and consumes it.
 - Context below `CC_CACHE_WARMER_MIN_TOKENS` (default 50000) is not worth
   warming. A cold rewrite of a small context is cheap.
+- cmux's own Stop hook posts a notification for every turn, pings included.
+  The plugin cannot stop cmux from posting it, so after its own ping's Stop it
+  dismisses the notifications on its surface created at or after the send
+  (`sent_at`). That clears the unread marker and the list entry; a banner or
+  phone push cmux already delivered stays delivered.
 - State lives in `${CLAUDE_PLUGIN_DATA}/<session_id>/`: `pid`, `armed_at`,
-  `pings`, `pending`, plus a shared `warmer.log`.
+  `pings`, `pending`, `sent_at`, `quiet`, plus a shared `warmer.log`.
 
 ## Failure matrix
 
@@ -55,3 +60,7 @@ Each warm prompt ends a turn, so its Stop hook re-arms the next cycle.
 | 17 | Stop fires before the turn's usage line reaches the transcript (seen live) | timer waits 2 s, then reads TTL | reads the previous turn, or nothing | arms normally |
 | 18 | UserPromptSubmit on the first prompt, transcript file not created yet (seen live) | resets count | rejected as bad input | no error |
 | 19 | Claude Code appends an `away_summary` recap (about 3 min after the turn) or metadata records while idle (seen live) | fires normally | every timer skips as `session active`, so nothing ever warms | log `warm n/N` |
+| 20 | Stop after our own ping, cmux posts its turn-complete notification (seen live: body `ok`) | dismisses it | a ping pings your phone and leaves an unread marker every 55 min | log `quiet: dismissed 1` |
+| 21 | same, and an older notification of yours is on the surface | dismisses only notifications created at or after the send | wipes the real "done" notification you have not read | older one kept |
+| 22 | Stop after your own prompt | nothing | dismisses your real notification | no `list-notifications` call |
+| 23 | Stop after our own ping, no notification shows up within 10 s | gives up | loops forever | log `quiet: none` |
