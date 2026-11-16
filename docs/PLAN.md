@@ -36,8 +36,10 @@ Each warm prompt ends a turn, so its Stop hook re-arms the next cycle.
   that process is gone, the pane may hold a shell under Claude Code's last
   screen, so the timer skips.
 - The input box must read empty twice, `SETTLE` (1 s) apart. After typing, the
-  box must read back as exactly the ping before Enter, with whitespace
-  runs squeezed to one space so a wrapped ping still matches. The window left is
+  box must read back as exactly the ping before Enter. Each screen line
+  must be the next piece of the ping; a wrap may drop the one space at its
+  break and nothing else. A screen cannot show trailing spaces or spaces typed
+  at a wrap point, so those two go unseen. The window left is
   the one CLI call between that read and Enter.
 - `warmer.log` rotates to `warmer.log.1` past 1 MB.
 - cmux's own Stop hook posts a notification for every turn, pings included.
@@ -88,5 +90,7 @@ Each warm prompt ends a turn, so its Stop hook re-arms the next cycle.
 | 34 | Claude Code exits after the arm sleep, during the settle wait | rechecks the process after settling, sends nothing | ping typed into the shell | log `skip: claude exited` |
 | 35 | you type a `❯` while the ping is typed | only the leading prompt marker is ignored, so the box mismatches and Enter stays unpressed | Enter submits your `❯` glued to the ping | log `abort: input changed` |
 | 36 | the tmux pane is in copy mode | reads fail, so the guard skips | the ping drives copy-mode bindings | log `skip: cannot read screen` |
-| 37 | you type a space into the ping while it is typed | whitespace runs squeeze to one space, not to none, so the box mismatches and Enter stays unpressed | Enter submits `/com pact` | log `abort: input changed` |
-| 38 | a narrow pane wraps the ping over indented lines | wrapped lines join with one space, so the box matches | a wrapped ping never sends | log `warm 1/3` |
+| 37 | you type a space into the ping while it is typed | the box no longer reads as the ping, so Enter stays unpressed | Enter submits `/com pact` | log `abort: input changed` |
+| 38 | a narrow pane wraps the ping at spaces, over indented lines | each line is the next piece of the ping, one dropped space per break | a wrapped ping never sends | log `warm 1/3` |
+| 39 | you type a space beside one the ping already has | compared exactly, so the doubled space mismatches | Enter submits the changed text | log `abort: input changed` |
+| 40 | a narrow pane splits a word of the ping across lines | a break needs no space, so the box matches | a ping wrapped mid-word never sends | log `warm 1/3` |

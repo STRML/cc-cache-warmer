@@ -38,19 +38,35 @@ context_tokens() {
     | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)' | tail -n 1
 }
 
-# Text in Claude Code's input box: the lines between the last two horizontal rules,
-# minus the leading prompt marker. A ❯ typed into the box stays, so it fails the match.
-# Wrapped lines join with a space and whitespace runs squeeze to one, so a wrapped
-# ping still matches while a space typed into it does not.
-input_text() {
-  awk '/^─/ { n++; last = prev; prev = NR } { line[NR] = $0 }
-       END { if (n < 2) exit 1
-             for (i = last + 1; i < prev; i++) { s = line[i]; if (i == last + 1) sub(/^❯/, "", s); print s } }' |
-    sed -e $'s/\xc2\xa0/ /g' | squeeze
+# Lines of Claude Code's input box: the lines between the last two horizontal rules.
+# The first loses the prompt marker and the space after it; every line loses the
+# trailing padding a terminal adds, and a wrapped line its indent. A ❯ typed into
+# the box stays, so it fails the match.
+box_lines() {
+  sed -e $'s/\xc2\xa0/ /g' |
+    awk '/^─/ { n++; last = prev; prev = NR } { line[NR] = $0 }
+         END { if (n < 2) exit 1
+               for (i = last + 1; i < prev; i++) {
+                 s = line[i]
+                 if (i == last + 1) sub(/^❯ ?/, "", s); else sub(/^[ \t]+/, "", s)
+                 sub(/[ \t]+$/, "", s); print s } }'
 }
 
-# Whitespace runs, newlines included, to one space; no leading or trailing space.
-squeeze() { tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//'; }
+# Text in the input box with all whitespace gone: empty means nobody is typing.
+input_text() { box_lines | tr -d '[:space:]'; }
+
+# The box holds exactly $1, laid out by wrapping only. Each screen line must be the
+# next piece of $1; a wrap may drop one space at the break and nothing else, so a
+# space, newline or character the user added fails the match.
+box_is() {
+  WANT=$1 awk 'BEGIN { w = ENVIRON["WANT"]; pos = 1 }
+    { s = $0; n = length(s)
+      if (n == 0) { bad = 1; exit }
+      if (NR > 1 && substr(w, pos, 1) == " ") pos++
+      if (substr(w, pos, n) != s) { bad = 1; exit }
+      pos += n }
+    END { exit !(!bad && NR > 0 && pos == length(w) + 1) }'
+}
 
 # The terminal that owns this pane. TERM_PROGRAM names the innermost multiplexer;
 # pane variables of outer ones leak inward (tmux started in herdr keeps HERDR_PANE_ID).
@@ -91,6 +107,7 @@ press_enter() {
 }
 
 input_box() { local screen; screen=$(read_screen) && input_text <<<"$screen"; }
+box_holds() { local screen; screen=$(read_screen) && box_lines <<<"$screen" | box_is "$1"; }
 
 # Start time tells a live Claude Code apart from a new process that reused its pid.
 started() { ps -o lstart= -p "$1" 2>/dev/null; }
@@ -219,13 +236,12 @@ send() {
   session_idle || { rm -f "$DIR/pending" "$DIR/sent_at"; exit 0; }
   # Enter submits the whole box, so press it only while the box holds our text alone.
   # Nothing but this read may sit between the match and Enter.
-  local want got='' _
-  want=$(printf '%s' "$text" | squeeze)
+  local _ ok=''
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    got=$(input_box) && [ "$got" = "$want" ] && break
+    box_holds "$text" && { ok=1; break; }
     sleep 0.2
   done
-  if [ "$got" != "$want" ]; then
+  if [ -z "$ok" ]; then
     rm -f "$DIR/pending" "$DIR/sent_at"
     log "abort: input changed, ping left unsent"
     exit 0

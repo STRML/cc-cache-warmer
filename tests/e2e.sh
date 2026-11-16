@@ -51,13 +51,17 @@ case $op in
     [ "$n" = "${FAKE_TYPE_ON_READ:-}" ] && printf h >>"$FAKE_BOX"
     rule=────────────────────────────────
     box=$(cat "$FAKE_BOX")
-    # FAKE_WRAP: word-wrap the box at 30 columns with an indent, as a narrow pane does.
-    [ -n "${FAKE_WRAP:-}" ] && box=$(printf '%s' "$box" | fold -s -w 30 | sed '2,$s/^/  /')
+    # FAKE_WRAP: wrap the box at 30 columns with an indent, as a narrow pane does.
+    # word drops the space at each break, as Claude Code does; hard splits words.
+    case ${FAKE_WRAP:-} in
+      word) box=$(printf '%s' "$box" | fold -s -w 30 | sed -e 's/ $//' -e '2,$s/^/  /') ;;
+      hard) box=$(printf '%s' "$box" | fold -w 30 | sed '2,$s/^/  /') ;;
+    esac
     printf '  ⎿  done\n\n%s\n❯ %s\n%s\n  status line\n' "$rule" "$box" "$rule"
     exit 0 ;;
   type)
-    # FAKE_USER_SPACE: a space typed into the middle of the text as it lands.
-    [ -n "${FAKE_USER_SPACE:-}" ] && text="${text:0:4} ${text:4}"
+    # FAKE_USER_SPACE=N: a space typed after the Nth character of the text as it lands.
+    [ -n "${FAKE_USER_SPACE:-}" ] && text="${text:0:FAKE_USER_SPACE} ${text:FAKE_USER_SPACE}"
     printf '%s%s' "$text" "${FAKE_USER_TYPES:-}" >>"$FAKE_BOX" ;;
   enter) : >"$FAKE_BOX" ;;
 esac
@@ -283,13 +287,22 @@ setup r36; transcript 1h 200000; unset CMUX_SURFACE_ID; export TERM_PROGRAM=tmux
 check 36 "tmux copy mode skips" eval 'no_sends && has_log "skip: cannot read screen"'
 
 # Row 37: you type a space into the ping as it lands. Squeezing whitespace must not hide it.
-setup r37; transcript 1h 200000; export FAKE_USER_SPACE=1; hook Stop
+setup r37; transcript 1h 200000; export FAKE_USER_SPACE=4; hook Stop
 for _ in $(seq 30); do has_log abort && break; sleep 1; done
 check 37 "a space typed into the ping is never submitted" eval '[ "$(enters)" -eq 0 ] && has_log "abort: input changed"'
 
 # Row 38: a narrow pane wraps the ping over several indented lines. It still matches.
-setup r38; transcript 1h 200000; export FAKE_WRAP=1; hook Stop; wait_fire
+setup r38; transcript 1h 200000; export FAKE_WRAP=word; hook Stop; wait_fire
 check 38 "a wrapped ping still sends" eval '[ "$(sends)" -eq 1 ] && [ "$(enters)" -eq 1 ] && has_log "warm 1/3"'
+
+# Row 39: you add a space beside one the ping already has. Squeezing would hide it.
+setup r39; transcript 1h 200000; export FAKE_USER_SPACE=14; hook Stop
+for _ in $(seq 30); do has_log abort && break; sleep 1; done
+check 39 "a doubled space in the ping is never submitted" eval '[ "$(enters)" -eq 0 ] && has_log "abort: input changed"'
+
+# Row 40: a narrow pane splits a word of the ping across lines. It still matches.
+setup r40; transcript 1h 200000; export FAKE_WRAP=hard; hook Stop; wait_fire
+check 40 "a ping wrapped mid-word still sends" eval '[ "$(sends)" -eq 1 ] && [ "$(enters)" -eq 1 ] && has_log "warm 1/3"'
 
 # Rows 27-30: the innermost terminal gets the keys.
 setup r27; transcript 1h 200000; unset CMUX_SURFACE_ID; export TERM_PROGRAM=herdr HERDR_PANE_ID=w0:p1; hook Stop; wait_fire
