@@ -40,12 +40,17 @@ context_tokens() {
 
 # Text in Claude Code's input box: the lines between the last two horizontal rules,
 # minus the leading prompt marker. A ❯ typed into the box stays, so it fails the match.
+# Wrapped lines join with a space and whitespace runs squeeze to one, so a wrapped
+# ping still matches while a space typed into it does not.
 input_text() {
   awk '/^─/ { n++; last = prev; prev = NR } { line[NR] = $0 }
        END { if (n < 2) exit 1
              for (i = last + 1; i < prev; i++) { s = line[i]; if (i == last + 1) sub(/^❯/, "", s); print s } }' |
-    sed -e $'s/\xc2\xa0//g' -e 's/[[:space:]]//g' | tr -d '\n'
+    sed -e $'s/\xc2\xa0/ /g' | squeeze
 }
+
+# Whitespace runs, newlines included, to one space; no leading or trailing space.
+squeeze() { tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//'; }
 
 # The terminal that owns this pane. TERM_PROGRAM names the innermost multiplexer;
 # pane variables of outer ones leak inward (tmux started in herdr keeps HERDR_PANE_ID).
@@ -214,7 +219,8 @@ send() {
   session_idle || { rm -f "$DIR/pending" "$DIR/sent_at"; exit 0; }
   # Enter submits the whole box, so press it only while the box holds our text alone.
   # Nothing but this read may sit between the match and Enter.
-  local want=${text//[[:space:]]/} got='' _
+  local want got='' _
+  want=$(printf '%s' "$text" | squeeze)
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     got=$(input_box) && [ "$got" = "$want" ] && break
     sleep 0.2

@@ -50,9 +50,15 @@ case $op in
     echo "$n" >"$FAKE_READS"
     [ "$n" = "${FAKE_TYPE_ON_READ:-}" ] && printf h >>"$FAKE_BOX"
     rule=────────────────────────────────
-    printf '  ⎿  done\n\n%s\n❯ %s\n%s\n  status line\n' "$rule" "$(cat "$FAKE_BOX")" "$rule"
+    box=$(cat "$FAKE_BOX")
+    # FAKE_WRAP: word-wrap the box at 30 columns with an indent, as a narrow pane does.
+    [ -n "${FAKE_WRAP:-}" ] && box=$(printf '%s' "$box" | fold -s -w 30 | sed '2,$s/^/  /')
+    printf '  ⎿  done\n\n%s\n❯ %s\n%s\n  status line\n' "$rule" "$box" "$rule"
     exit 0 ;;
-  type) printf '%s%s' "$text" "${FAKE_USER_TYPES:-}" >>"$FAKE_BOX" ;;
+  type)
+    # FAKE_USER_SPACE: a space typed into the middle of the text as it lands.
+    [ -n "${FAKE_USER_SPACE:-}" ] && text="${text:0:4} ${text:4}"
+    printf '%s%s' "$text" "${FAKE_USER_TYPES:-}" >>"$FAKE_BOX" ;;
   enter) : >"$FAKE_BOX" ;;
 esac
 [ "$name" = cmux ] && name= || name="$name "
@@ -73,7 +79,7 @@ setup() {
   unset TERM_PROGRAM TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID
   export CMUX_SURFACE_ID="SURF-1"
   export CC_CACHE_WARMER_DELAY=$SLEEP
-  unset CC_CACHE_WARMER_PINGS CC_CACHE_WARMER_MIN_TOKENS FAKE_SCREEN_FAIL FAKE_TYPE_ON_READ FAKE_USER_TYPES FAKE_TMUX_MODE
+  unset CC_CACHE_WARMER_PINGS CC_CACHE_WARMER_MIN_TOKENS FAKE_SCREEN_FAIL FAKE_TYPE_ON_READ FAKE_USER_TYPES FAKE_TMUX_MODE FAKE_USER_SPACE FAKE_WRAP
   export FAKE_NOTES="$T/notes.json"
   : >"$FAKE_LOG"
   : >"$FAKE_BOX"
@@ -275,6 +281,15 @@ check 35 "a typed prompt marker is never submitted" eval '[ "$(enters)" -eq 0 ] 
 # Row 36: the tmux pane sits in copy mode, where capture-pane shows the app but keys go to copy-mode bindings.
 setup r36; transcript 1h 200000; unset CMUX_SURFACE_ID; export TERM_PROGRAM=tmux TMUX_PANE=%3 FAKE_TMUX_MODE=1; hook Stop; wait_fire
 check 36 "tmux copy mode skips" eval 'no_sends && has_log "skip: cannot read screen"'
+
+# Row 37: you type a space into the ping as it lands. Squeezing whitespace must not hide it.
+setup r37; transcript 1h 200000; export FAKE_USER_SPACE=1; hook Stop
+for _ in $(seq 30); do has_log abort && break; sleep 1; done
+check 37 "a space typed into the ping is never submitted" eval '[ "$(enters)" -eq 0 ] && has_log "abort: input changed"'
+
+# Row 38: a narrow pane wraps the ping over several indented lines. It still matches.
+setup r38; transcript 1h 200000; export FAKE_WRAP=1; hook Stop; wait_fire
+check 38 "a wrapped ping still sends" eval '[ "$(sends)" -eq 1 ] && [ "$(enters)" -eq 1 ] && has_log "warm 1/3"'
 
 # Rows 27-30: the innermost terminal gets the keys.
 setup r27; transcript 1h 200000; unset CMUX_SURFACE_ID; export TERM_PROGRAM=herdr HERDR_PANE_ID=w0:p1; hook Stop; wait_fire
